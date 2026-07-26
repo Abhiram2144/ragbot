@@ -5,3 +5,12 @@ alembic>=1.12
 psycopg2-binary
 python-dotenv
 pydantic-settings
+python-jose[cryptography]
+bcrypt
+python-multipart
+celery[redis]
+pypdf
+python-docx
+openai
+qdrant-client
+pytest

@@ -11,7 +11,7 @@ every component should be explainable in an interview, not just working.
 - DB: PostgreSQL (SQLAlchemy + Alembic)
 - Vector DB: Qdrant
 - Queue: Celery + Redis
-- LLM: Anthropic API
+- LLM: OPENAI API
 
 ## Commands
 - Start infra: docker compose up -d
@@ -63,4 +63,4 @@ current phase, files modified this session, and pass/fail status of last
 verification step. Tool output and file-read contents can be dropped first.
 
 ## Current phase
-Phase 0 — foundations (see docs/plan.md for full phase breakdown)
+Phase 2 — Query pipeline v1 (see docs/plan.md for full phase breakdown)
