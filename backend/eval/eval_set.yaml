@@ -1,0 +1,45 @@
+# Hand-labeled evaluation set for Phase 5 retrieval/generation eval.
+#
+# Each entry pins one question to the exact chunk that should be retrieved
+# to answer it correctly. Loaded and validated by app/services/eval_loader.py.
+# Metrics calculation and the eval runner are built in 5.2/5.3 — this file
+# is just the labeled data.
+#
+# How to add entries:
+#   1. python scripts/dump_chunks.py <kb_id>   — read real indexed chunks
+#   2. Pick a chunk worth testing retrieval against, write a question a
+#      real user might ask that this chunk should answer.
+#   3. Fill in the fields below using the ids dump_chunks.py printed.
+#
+# Schema (all fields required):
+#   id                    — unique string, convention: eval_NNN
+#   kb_id                 — UUID of the knowledge base this question targets
+#   question              — the question text, as a user would type it
+#   expected_document_id  — UUID of the document containing the answer
+#   expected_chunk_id     — UUID (Qdrant point id) of the specific chunk
+#                           that should be retrieved, from dump_chunks.py
+#   notes                 — why this is a good test case: what it stresses
+#                           (exact keyword match, paraphrase, acronym
+#                           expansion, multi-chunk ambiguity, etc.)
+#
+# ---------------------------------------------------------------------------
+# The two entries below are EXAMPLES ONLY. The ids are placeholders (all
+# zeros) and will fail eval_loader.py's existence checks on purpose — they
+# do not point at real data. Replace them with real hand-labeled questions
+# before running any eval, and delete this notice once real entries exist.
+# ---------------------------------------------------------------------------
+
+entries:
+  - id: eval_001
+    kb_id: "00000000-0000-0000-0000-000000000000"
+    question: "EXAMPLE — replace with a real question, e.g. 'What error code appears when the API key is expired?'"
+    expected_document_id: "00000000-0000-0000-0000-000000000000"
+    expected_chunk_id: "00000000-0000-0000-0000-000000000000"
+    notes: "EXAMPLE — e.g. tests exact keyword match on an error code (E-4021); dense-only retrieval might miss this, hybrid/BM25 should catch it."
+
+  - id: eval_002
+    kb_id: "00000000-0000-0000-0000-000000000000"
+    question: "EXAMPLE — replace with a real question, e.g. 'Why won't my login work?'"
+    expected_document_id: "00000000-0000-0000-0000-000000000000"
+    expected_chunk_id: "00000000-0000-0000-0000-000000000000"
+    notes: "EXAMPLE — e.g. tests paraphrase recall; the source chunk talks about 'authentication failure', no exact keyword overlap with the question."

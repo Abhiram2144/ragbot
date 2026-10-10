@@ -63,4 +63,4 @@ current phase, files modified this session, and pass/fail status of last
 verification step. Tool output and file-read contents can be dropped first.
 
 ## Current phase
-Phase 2 — Query pipeline v1 (see docs/plan.md for full phase breakdown)
+Phase 4 — Hybrid search + reranking (see docs/plan.md for full phase breakdown)

@@ -41,7 +41,7 @@ export default function SignupPage() {
     setLoading(true)
     setError('')
     try {
-      const { access_token } = await api.signup({ org_name: orgName, email, password })
+      const { access_token } = await api.auth.signup({ org_name: orgName, email, password })
       setAuthToken(access_token)
       setToken(access_token)
       navigate('/dashboard', { replace: true })

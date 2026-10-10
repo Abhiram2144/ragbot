@@ -30,41 +30,90 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* ── Auth animations ──────────────────────────────────────────────────────── */
+
 @keyframes card-rise {
-  from {
-    opacity: 0;
-    translate: 0 16px;
-  }
-  to {
-    opacity: 1;
-    translate: 0 0;
-  }
+  from { opacity: 0; translate: 0 16px; }
+  to   { opacity: 1; translate: 0 0; }
 }
 
 @keyframes auth-rise {
-  from {
-    opacity: 0;
-    translate: 0 8px;
-  }
-  to {
-    opacity: 1;
-    translate: 0 0;
-  }
+  from { opacity: 0; translate: 0 8px; }
+  to   { opacity: 1; translate: 0 0; }
 }
 
 .animate-auth-rise {
   animation: auth-rise 300ms ease-out both;
 }
 
+/* ── Dashboard animations ─────────────────────────────────────────────────── */
+
+@keyframes chunk-bar {
+  0%, 100% { background-color: var(--color-stroke); }
+  50%       { background-color: var(--color-primary); }
+}
+
+@keyframes doc-slide-in {
+  from { opacity: 0; translate: 0 -8px; }
+  to   { opacity: 1; translate: 0 0; }
+}
+
+@keyframes check-pop {
+  from { opacity: 0; scale: 0.7; }
+  to   { opacity: 1; scale: 1; }
+}
+
+@keyframes modal-in {
+  from { opacity: 0; translate: 0 6px; }
+  to   { opacity: 1; translate: 0 0; }
+}
+
+.doc-enter {
+  animation: doc-slide-in 350ms ease-out both;
+}
+
+.check-pop {
+  animation: check-pop 200ms ease-out both;
+}
+
+.animate-modal-in {
+  animation: modal-in 200ms ease-out both;
+}
+
+/* ── Query/Chat animations ────────────────────────────────────────────────── */
+
+@keyframes qa-slide-in {
+  from { opacity: 0; translate: 0 12px; }
+  to   { opacity: 1; translate: 0 0; }
+}
+
+@keyframes thinking-pulse {
+  0%, 100% { opacity: 0.28; }
+  50%       { opacity: 1; }
+}
+
+@keyframes source-pulse {
+  0%   { transform: scale(1); box-shadow: none; }
+  28%  { transform: scale(1.02); box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 32%, transparent), 0 4px 14px color-mix(in srgb, var(--color-accent) 18%, transparent); }
+  100% { transform: scale(1); box-shadow: none; }
+}
+
+.qa-enter {
+  animation: qa-slide-in 250ms ease-out both;
+}
+
+/* ── Reduced-motion overrides ─────────────────────────────────────────────── */
+
 @media (prefers-reduced-motion: reduce) {
-  .animate-auth-rise {
-    animation: none;
-    opacity: 1;
-    translate: none;
-  }
-  .card-animated {
+  .animate-auth-rise,
+  .doc-enter,
+  .check-pop,
+  .animate-modal-in,
+  .card-animated,
+  .qa-enter {
     animation: none !important;
     opacity: 1 !important;
     translate: none !important;
+    scale: 1 !important;
   }
 }

@@ -10,7 +10,53 @@ from app.services.prompt_builder import build_rag_prompt
 _MAX_ATTEMPTS = 3
 _CITATION_RE = re.compile(r"\[(\d+)\]")
 
+# Separate cheap model for query rewriting — intentionally not settings.OPENAI_CHAT_MODEL.
+_REWRITE_MODEL = "gpt-4o-mini"
+_REWRITE_SYSTEM_PROMPT = (
+    "Rewrite the following search query to improve recall from a keyword and "
+    "semantic document index. Expand technical acronyms, add common synonyms "
+    "and related terms for the core concepts, and remove conversational filler. "
+    "Do not invent information or change the intent. Return only the rewritten "
+    "query on a single line, no explanation."
+)
+
 _client = OpenAI(api_key=settings.OPENAI_API_KEY)
+
+
+def rewrite_query(question: str) -> str:
+    """Rewrite a search query to improve retrieval recall.
+
+    Expands acronyms, adds synonyms, and strips conversational filler.
+    The original question is preserved for the generation prompt; only
+    the rewritten version is used for embedding and vector search.
+    """
+    delay = 1.0
+    last_exc: Exception | None = None
+
+    for attempt in range(_MAX_ATTEMPTS):
+        try:
+            response = _client.chat.completions.create(
+                model=_REWRITE_MODEL,
+                messages=[
+                    {"role": "system", "content": _REWRITE_SYSTEM_PROMPT},
+                    {"role": "user", "content": question},
+                ],
+                temperature=0,
+                max_tokens=200,
+            )
+            return response.choices[0].message.content.strip()
+        except RateLimitError as exc:
+            last_exc = exc
+        except APIStatusError as exc:
+            if exc.status_code < 500:
+                raise
+            last_exc = exc
+
+        if attempt < _MAX_ATTEMPTS - 1:
+            time.sleep(delay)
+            delay *= 2
+
+    raise RuntimeError(f"Query rewrite failed after {_MAX_ATTEMPTS} attempts") from last_exc
 
 
 def generate_answer(question: str, chunks: list[dict]) -> dict:

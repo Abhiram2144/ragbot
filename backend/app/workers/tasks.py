@@ -38,7 +38,8 @@ def process_document(self, document_id: str):
 
         text = chunking.extract_text(doc.file_path, doc.filename)
         chunks = chunking.chunk_text(text)
-        vectors = embedding.embed_chunks(chunks)
+        dense_vectors = embedding.embed_chunks(chunks)
+        sparse_vectors = embedding.sparse_embed_chunks(chunks)
 
         vector_store.ensure_collection()
         vector_store.index_chunks(
@@ -46,7 +47,8 @@ def process_document(self, document_id: str):
             kb_id=str(doc.kb_id),
             document_id=str(doc.id),
             chunks=chunks,
-            vectors=vectors,
+            dense_vectors=dense_vectors,
+            sparse_vectors=sparse_vectors,
         )
 
         doc.status = "complete"

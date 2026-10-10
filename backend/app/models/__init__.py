@@ -6,6 +6,7 @@ from app.models.knowledge_base import KnowledgeBase
 from app.models.document import Document
 from app.models.query_log import QueryLog
 from app.models.subscription import Subscription
+from app.models.eval_run import EvalRun
 
 __all__ = [
     "Base",
@@ -16,4 +17,5 @@ __all__ = [
     "Document",
     "QueryLog",
     "Subscription",
+    "EvalRun",
 ]

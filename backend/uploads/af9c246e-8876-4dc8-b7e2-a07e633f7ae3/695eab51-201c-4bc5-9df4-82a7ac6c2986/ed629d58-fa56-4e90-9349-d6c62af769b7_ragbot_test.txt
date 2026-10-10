@@ -1,0 +1,1 @@
+This is a test document for the RAG platform. It has multiple sentences for chunking. The quick brown fox jumped over the lazy dog. Knowledge retrieval should work after indexing this content.

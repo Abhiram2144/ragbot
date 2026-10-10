@@ -9,8 +9,12 @@ python-jose[cryptography]
 bcrypt
 python-multipart
 celery[redis]
+redis>=5.0
 pypdf
 python-docx
 openai
 qdrant-client
+fastembed>=0.3
+cohere>=5.0
+pyyaml>=6.0
 pytest

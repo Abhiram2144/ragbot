@@ -1,0 +1,1 @@
+Second test document. This one tests multi-document scenarios. Each document should be independently tracked and displayed in the knowledge base.

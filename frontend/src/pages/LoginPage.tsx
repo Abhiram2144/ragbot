@@ -39,7 +39,7 @@ export default function LoginPage() {
     setLoading(true)
     setError('')
     try {
-      const { access_token } = await api.login({ email, password })
+      const { access_token } = await api.auth.login({ email, password })
       setAuthToken(access_token)
       setToken(access_token)
       navigate('/dashboard', { replace: true })
