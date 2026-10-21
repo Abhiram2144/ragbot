@@ -1,8 +1,10 @@
 import json
+import re
 import time
 import uuid
+from collections import Counter
 from collections.abc import Iterator
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -15,8 +17,16 @@ from app.database import get_db
 from app.dependencies import CurrentUser, get_current_user, get_kb_or_404
 from app.middleware.rate_limit import enforce_query_rate_limit
 from app.models.knowledge_base import KnowledgeBase
+from app.models.document import Document
+from app.models.eval_run import EvalRun
 from app.models.query_log import QueryLog
-from app.schemas.analytics import AnalyticsResponse, DailyAnalytics
+from app.schemas.analytics import (
+    AnalyticsResponse,
+    DailyAnalytics,
+    KnowledgeBaseSignal,
+    QuestionSignal,
+    StaleDocumentSignal,
+)
 from app.schemas.knowledge_base import KnowledgeBaseCreate, KnowledgeBaseResponse, KnowledgeBaseUpdate
 from app.schemas.query import (
     AnswerResponse,
@@ -26,12 +36,14 @@ from app.schemas.query import (
     QueryLogListResponse,
     QueryRequest,
 )
+from app.schemas.evaluation import EvaluationRunRequest, EvaluationRunResponse
 from app.services.cost_calculator import estimate_cost
 from app.services.embedding import embed_query, sparse_embed_query
 from app.services.generation import generate_answer, generate_answer_stream, rewrite_query
 from app.services.query_logging import log_query
 from app.services.reranking import rerank_chunks
 from app.services.vector_store import hybrid_search_chunks, search_chunks
+from app.services.evaluation_runner import run_evaluation
 
 router = APIRouter(prefix="/knowledge-bases", tags=["knowledge-bases"])
 
@@ -119,6 +131,12 @@ def _chunk_scores(hits: list[dict], search_mode: str) -> list[dict]:
             }
         )
     return scores
+
+
+def _answer_confidence(answer: str, sources: list[dict]) -> str:
+    if not sources or "I don't have enough information to answer that." in answer:
+        return "low"
+    return "high" if len(sources) >= 3 else "medium"
 
 
 def _retrieve(
@@ -237,7 +255,7 @@ def _sse_events(
             )
             # Send the client-safe subset — prompt stays server-side, but the
             # client needs query_log_id to submit feedback against this answer.
-            yield f"data: {json.dumps({'type': 'done', 'sources': event['sources'], 'query_log_id': str(query_log_id)})}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'sources': event['sources'], 'query_log_id': str(query_log_id), 'telemetry': {'latency_ms': total_ms, 'source_count': len(event['sources']), 'confidence': _answer_confidence(event['answer'], event['sources'])}})}\n\n"
 
 
 @router.post("/{kb_id}/query", response_model=AnswerResponse)
@@ -373,6 +391,12 @@ def get_query_log(
         estimated_cost_usd=row.estimated_cost_usd,
         search_mode=row.search_mode,
         feedback=row.feedback,
+        confidence=(
+            "low"
+            if not row.retrieved_chunk_ids or not row.response or "I don't have enough information to answer that." in row.response
+            else "high" if len(row.retrieved_chunk_ids) >= 3 else "medium"
+        ),
+        source_count=len(row.retrieved_chunk_ids or []),
         created_at=row.created_at,
     )
 
@@ -383,35 +407,95 @@ def get_analytics(
     db: Session = Depends(get_db),
     days: int = Query(30, ge=1, le=365),
 ):
-    """Aggregate production query traffic over the last N days.
-
-    Distinct from the Phase 5 eval runner: this reflects real user
-    queries logged to query_logs, not a controlled eval set.
-    """
+    """Return a focused, org-wide admin view of real query traffic."""
     since = datetime.now(timezone.utc) - timedelta(days=days)
-    base = db.query(QueryLog).filter(QueryLog.kb_id == kb.id, QueryLog.created_at >= since)
+    base = db.query(QueryLog).filter(QueryLog.org_id == kb.org_id, QueryLog.created_at >= since)
+    rows = base.order_by(QueryLog.created_at.desc()).all()
+    total_queries = len(rows)
 
-    total_queries = base.count()
+    latency_values = [row.latency_ms for row in rows if row.latency_ms is not None]
+    cost_values = [row.estimated_cost_usd for row in rows if row.estimated_cost_usd is not None]
+    avg_latency_ms = sum(latency_values) / len(latency_values) if latency_values else 0.0
+    avg_cost_usd = sum(cost_values) / len(cost_values) if cost_values else 0.0
 
-    avg_latency_ms = (
-        db.query(func.avg(QueryLog.latency_ms))
-        .filter(QueryLog.kb_id == kb.id, QueryLog.created_at >= since, QueryLog.latency_ms.isnot(None))
-        .scalar()
+    up_count = sum(row.feedback == "up" for row in rows)
+    down_count = sum(row.feedback == "down" for row in rows)
+    feedback_ratio = up_count / (up_count + down_count) if (up_count + down_count) > 0 else 0.0
+    feedback_reasons = {
+        reason: count
+        for reason, count in Counter(row.feedback_reason for row in rows if row.feedback_reason).items()
+    }
+
+    kb_rows = db.query(KnowledgeBase.id, KnowledgeBase.name).filter(KnowledgeBase.org_id == kb.org_id).all()
+    kb_names = {str(kb_id): name for kb_id, name in kb_rows}
+    kb_counts = Counter(str(row.kb_id) for row in rows)
+    knowledge_bases = [
+        KnowledgeBaseSignal(kb_id=kb_id, name=kb_names.get(kb_id, "Unknown"), query_count=count)
+        for kb_id, count in kb_counts.most_common()
+    ]
+
+    def normalize_question(question: str) -> str:
+        return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]", "", question.lower())).strip()
+
+    normalized = Counter(normalize_question(row.question) for row in rows)
+    latest_by_question = {}
+    for row in rows:
+        key = normalize_question(row.question)
+        latest_by_question.setdefault(key, row)
+
+    common_questions = [
+        QuestionSignal(
+            question=latest_by_question[key].question,
+            count=count,
+            query_log_id=str(latest_by_question[key].id),
+            kb_id=str(latest_by_question[key].kb_id),
+            created_at=latest_by_question[key].created_at.isoformat(),
+        )
+        for key, count in normalized.most_common(8)
+        if key
+    ]
+
+    low_confidence_questions = []
+    for row in rows:
+        no_context = not row.retrieved_chunk_ids or not row.response or "I don't have enough information to answer that." in row.response
+        if no_context:
+            low_confidence_questions.append(
+                QuestionSignal(
+                    question=row.question,
+                    count=1,
+                    query_log_id=str(row.id),
+                    kb_id=str(row.kb_id),
+                    created_at=row.created_at.isoformat(),
+                )
+            )
+    low_confidence_questions = low_confidence_questions[:8]
+
+    stale_rows = (
+        db.query(Document)
+        .filter(
+            Document.org_id == kb.org_id,
+            Document.publication_status == "published",
+            Document.review_date.isnot(None),
+            Document.review_date < date.today(),
+        )
+        .order_by(Document.review_date.asc())
+        .all()
     )
-    avg_cost_usd = (
-        db.query(func.avg(QueryLog.estimated_cost_usd))
-        .filter(QueryLog.kb_id == kb.id, QueryLog.created_at >= since, QueryLog.estimated_cost_usd.isnot(None))
-        .scalar()
-    )
-
-    up_count = base.filter(QueryLog.feedback == "up").count()
-    down_count = base.filter(QueryLog.feedback == "down").count()
-    feedback_ratio = up_count / (up_count + down_count) if (up_count + down_count) > 0 else None
+    stale_documents = [
+        StaleDocumentSignal(
+            document_id=str(row.id),
+            kb_id=str(row.kb_id),
+            filename=row.filename,
+            review_date=row.review_date.isoformat(),
+            publication_status=row.publication_status,
+        )
+        for row in stale_rows
+    ]
 
     day_col = func.date(QueryLog.created_at)
     daily_rows = (
         db.query(day_col.label("day"), func.count(QueryLog.id), func.avg(QueryLog.latency_ms))
-        .filter(QueryLog.kb_id == kb.id, QueryLog.created_at >= since)
+        .filter(QueryLog.org_id == kb.org_id, QueryLog.created_at >= since)
         .group_by(day_col)
         .order_by(day_col)
         .all()
@@ -421,14 +505,53 @@ def get_analytics(
             date=str(day),
             query_count=count,
             avg_latency_ms=float(avg_lat) if avg_lat is not None else None,
+            helpful_rate=(
+                sum(row.feedback == "up" for row in rows if row.created_at.date() == day)
+                / sum(row.feedback in ("up", "down") for row in rows if row.created_at.date() == day)
+                if sum(row.feedback in ("up", "down") for row in rows if row.created_at.date() == day) > 0
+                else None
+            ),
         )
         for day, count, avg_lat in daily_rows
     ]
 
     return AnalyticsResponse(
         total_queries=total_queries,
-        avg_latency_ms=float(avg_latency_ms) if avg_latency_ms is not None else None,
-        avg_cost_usd=float(avg_cost_usd) if avg_cost_usd is not None else None,
+        avg_latency_ms=float(avg_latency_ms),
+        avg_cost_usd=float(avg_cost_usd),
         feedback_ratio=feedback_ratio,
+        feedback_reasons=feedback_reasons,
         daily=daily,
+        low_confidence_questions=low_confidence_questions,
+        common_questions=common_questions,
+        knowledge_bases=knowledge_bases,
+        stale_documents=stale_documents,
+    )
+
+
+@router.post("/{kb_id}/quality/evaluate", response_model=EvaluationRunResponse, status_code=201)
+def create_quality_run(
+    body: EvaluationRunRequest,
+    search_mode: str = Query("hybrid", pattern="^(dense|hybrid)$"),
+    kb: KnowledgeBase = Depends(get_kb_or_404),
+):
+    return run_evaluation(
+        search_mode=search_mode,
+        org_id=kb.org_id,
+        kb_id=kb.id,
+        use_faithfulness=body.use_faithfulness,
+    )
+
+
+@router.get("/{kb_id}/quality/runs", response_model=list[EvaluationRunResponse])
+def list_quality_runs(
+    kb: KnowledgeBase = Depends(get_kb_or_404),
+    db: Session = Depends(get_db),
+):
+    return (
+        db.query(EvalRun)
+        .filter(EvalRun.org_id == kb.org_id, EvalRun.kb_id == kb.id)
+        .order_by(EvalRun.created_at.desc())
+        .limit(10)
+        .all()
     )

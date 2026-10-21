@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import type { Doc } from '../api/client'
+import { api } from '../api/client'
+import type { Doc, PublicationStatus } from '../api/client'
 
 const BAR_WIDTHS = [88, 72, 93, 68, 81] // percent
 
@@ -45,6 +46,16 @@ function StatusBadge({ status }: { status: Doc['status'] }) {
   )
 }
 
+function PublicationBadge({ status }: { status: PublicationStatus }) {
+  const styles: Record<PublicationStatus, { color: string; bg: string }> = {
+    draft: { color: 'color-mix(in srgb, var(--color-ink) 55%, transparent)', bg: 'color-mix(in srgb, var(--color-stroke) 70%, transparent)' },
+    published: { color: 'var(--color-primary)', bg: 'color-mix(in srgb, var(--color-primary) 10%, transparent)' },
+    archived: { color: 'color-mix(in srgb, var(--color-ink) 45%, transparent)', bg: 'color-mix(in srgb, var(--color-ink) 7%, transparent)' },
+  }
+  const style = styles[status]
+  return <span className="shrink-0 text-xs font-medium px-2 py-0.5 rounded-full" style={{ color: style.color, background: style.bg }}>{status}</span>
+}
+
 function FailedSection({ message }: { message: string | null }) {
   const [expanded, setExpanded] = useState(false)
   const text = message ?? 'Unknown error'
@@ -79,9 +90,41 @@ function formatDate(iso: string) {
 interface Props {
   doc: Doc
   isNew: boolean
+  onUpdated: (doc: Doc) => void
 }
 
-export default function DocumentCard({ doc, isNew }: Props) {
+export default function DocumentCard({ doc, isNew, onUpdated }: Props) {
+  const [editing, setEditing] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [form, setForm] = useState({
+    department: doc.department,
+    owner: doc.owner ?? '',
+    effective_date: doc.effective_date ?? '',
+    review_date: doc.review_date ?? '',
+    publication_status: doc.publication_status,
+  })
+  const stale = Boolean(doc.review_date && new Date(`${doc.review_date}T23:59:59`) < new Date() && doc.publication_status === 'published')
+
+  async function save() {
+    setSaving(true)
+    setError(null)
+    try {
+      const updated = await api.documents.update(doc.kb_id, doc.id, {
+        ...form,
+        owner: form.owner || null,
+        effective_date: form.effective_date || null,
+        review_date: form.review_date || null,
+      })
+      onUpdated(updated)
+      setEditing(false)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not save metadata')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
     <div
       className={`bg-surface rounded-xl p-4 ${isNew && !reducedMotion ? 'doc-enter' : ''}`}
@@ -97,8 +140,39 @@ export default function DocumentCard({ doc, isNew }: Props) {
             {formatDate(doc.created_at)}
           </p>
         </div>
-        <StatusBadge status={doc.status} />
+        <div className="flex items-center gap-2">
+          <StatusBadge status={doc.status} />
+          <PublicationBadge status={doc.publication_status} />
+        </div>
       </div>
+
+      {stale && (
+        <div className="mt-3 text-xs px-3 py-2 rounded-lg" style={{ color: 'var(--color-accent)', background: 'color-mix(in srgb, var(--color-accent) 10%, transparent)' }}>
+          Review date passed. This policy may be outdated.
+        </div>
+      )}
+
+      {editing ? (
+        <div className="mt-4 grid grid-cols-2 gap-3">
+          <label className="text-xs text-ink/55">Department<input value={form.department} onChange={e => setForm({ ...form, department: e.target.value })} className="mt-1 w-full rounded-md border border-stroke bg-background px-2 py-1.5 text-sm text-ink outline-none" /></label>
+          <label className="text-xs text-ink/55">Owner<input value={form.owner} onChange={e => setForm({ ...form, owner: e.target.value })} className="mt-1 w-full rounded-md border border-stroke bg-background px-2 py-1.5 text-sm text-ink outline-none" placeholder="name or email" /></label>
+          <label className="text-xs text-ink/55">Effective date<input type="date" value={form.effective_date} onChange={e => setForm({ ...form, effective_date: e.target.value })} className="mt-1 w-full rounded-md border border-stroke bg-background px-2 py-1.5 text-sm text-ink outline-none" /></label>
+          <label className="text-xs text-ink/55">Review date<input type="date" value={form.review_date} onChange={e => setForm({ ...form, review_date: e.target.value })} className="mt-1 w-full rounded-md border border-stroke bg-background px-2 py-1.5 text-sm text-ink outline-none" /></label>
+          <label className="text-xs text-ink/55">Lifecycle status<select value={form.publication_status} onChange={e => setForm({ ...form, publication_status: e.target.value as PublicationStatus })} className="mt-1 w-full rounded-md border border-stroke bg-background px-2 py-1.5 text-sm text-ink outline-none"><option value="published">Published</option><option value="draft">Draft</option><option value="archived">Archived</option></select></label>
+          <div className="col-span-2 flex items-center justify-end gap-2 pt-1">
+            {error && <span className="mr-auto text-xs text-accent">{error}</span>}
+            <button onClick={() => setEditing(false)} disabled={saving} className="rounded-md border border-stroke px-3 py-1.5 text-xs text-ink/60 cursor-pointer">Cancel</button>
+            <button onClick={save} disabled={saving} className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-white cursor-pointer disabled:opacity-50">{saving ? 'Saving…' : 'Save metadata'}</button>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-3 flex items-center gap-3 text-xs text-ink/45">
+          <span>{doc.department}</span>
+          <span>{doc.owner || 'No owner'}</span>
+          <span>Review {doc.review_date ? formatDate(doc.review_date) : 'not set'}</span>
+          <button onClick={() => setEditing(true)} className="ml-auto cursor-pointer font-medium text-primary">Edit metadata</button>
+        </div>
+      )}
 
       {/* Status visual */}
       {doc.status === 'processing' && <ChunkBars />}

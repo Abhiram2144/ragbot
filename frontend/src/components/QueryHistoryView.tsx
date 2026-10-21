@@ -380,6 +380,15 @@ function QueryTraceDetail({ kb, queryLogId, onBack }: { kb: KnowledgeBase; query
             <p className="font-display" style={{ fontSize: 18, color: 'var(--color-ink)', margin: 0 }}>
               {detail.question}
             </p>
+            <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 11, fontWeight: 600, color: detail.confidence === 'high' ? 'var(--color-primary)' : detail.confidence === 'medium' ? 'var(--color-accent)' : 'var(--color-accent)', background: 'color-mix(in srgb, var(--color-primary) 8%, transparent)', borderRadius: 5, padding: '3px 7px' }}>
+                {detail.confidence} confidence
+              </span>
+              <span style={{ fontSize: 11, color: MUTED, fontFamily: 'var(--font-mono)', padding: '3px 0' }}>
+                {detail.source_count} {detail.source_count === 1 ? 'source' : 'sources'}
+              </span>
+              {detail.feedback && <span style={{ fontSize: 11, color: MUTED, padding: '3px 0' }}>Feedback: {detail.feedback}</span>}
+            </div>
           </div>
 
           {/* Stage latencies */}
@@ -541,13 +550,13 @@ function QueryTraceDetail({ kb, queryLogId, onBack }: { kb: KnowledgeBase; query
 
 // ─── QueryHistoryView ────────────────────────────────────────────────────────
 
-export default function QueryHistoryView({ kb }: { kb: KnowledgeBase }) {
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+export default function QueryHistoryView({ kb, initialQueryId }: { kb: KnowledgeBase; initialQueryId?: string | null }) {
+  const [selectedId, setSelectedId] = useState<string | null>(initialQueryId ?? null)
 
   // Reset to list view when switching KBs
   useEffect(() => {
-    setSelectedId(null)
-  }, [kb.id])
+    setSelectedId(initialQueryId ?? null)
+  }, [kb.id, initialQueryId])
 
   return (
     <div className="flex-1 overflow-y-auto">

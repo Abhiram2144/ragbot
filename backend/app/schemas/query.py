@@ -25,11 +25,13 @@ class AnswerResponse(BaseModel):
 
 class FeedbackRequest(BaseModel):
     feedback: Literal["up", "down"]
+    reason: Optional[Literal["incorrect", "outdated", "missing_information"]] = None
 
 
 class FeedbackResponse(BaseModel):
     id: uuid.UUID
     feedback: Optional[str]
+    reason: Optional[str] = None
 
 
 # ─── Query history / trace (Phase 6) ────────────────────────────────────────
@@ -76,4 +78,6 @@ class QueryLogDetail(BaseModel):
     estimated_cost_usd: Optional[float]
     search_mode: Optional[str]
     feedback: Optional[str]
+    confidence: Literal["high", "medium", "low"]
+    source_count: int
     created_at: datetime

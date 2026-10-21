@@ -1,4 +1,5 @@
-import { createContext, useContext, useState, useCallback } from 'react'
+import { createContext, useContext, useState, useCallback, useEffect } from 'react'
+import { AUTH_TOKEN_KEY, setAuthToken } from '../api/client'
 
 interface AuthContextValue {
   token: string | null
@@ -9,10 +10,32 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | null>(null)
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [token, setTokenState] = useState<string | null>(null)
+  const [token, setTokenState] = useState<string | null>(() => {
+    const stored = localStorage.getItem(AUTH_TOKEN_KEY)
+    setAuthToken(stored)
+    return stored
+  })
 
-  const setToken = useCallback((t: string) => setTokenState(t), [])
-  const clearToken = useCallback(() => setTokenState(null), [])
+  const setToken = useCallback((nextToken: string) => {
+    localStorage.setItem(AUTH_TOKEN_KEY, nextToken)
+    setAuthToken(nextToken)
+    setTokenState(nextToken)
+  }, [])
+
+  const clearToken = useCallback(() => {
+    localStorage.removeItem(AUTH_TOKEN_KEY)
+    setAuthToken(null)
+    setTokenState(null)
+  }, [])
+
+  useEffect(() => {
+    function handleExpired() {
+      clearToken()
+    }
+
+    window.addEventListener('auth:expired', handleExpired)
+    return () => window.removeEventListener('auth:expired', handleExpired)
+  }, [clearToken])
 
   return (
     <AuthContext.Provider value={{ token, setToken, clearToken }}>

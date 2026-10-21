@@ -29,9 +29,10 @@ def set_feedback(
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Query log not found")
 
-    if row.feedback != body.feedback:
+    if row.feedback != body.feedback or row.feedback_reason != body.reason:
         row.feedback = body.feedback
+        row.feedback_reason = body.reason
         db.commit()
         db.refresh(row)
 
-    return FeedbackResponse(id=row.id, feedback=row.feedback)
+    return FeedbackResponse(id=row.id, feedback=row.feedback, reason=row.feedback_reason)

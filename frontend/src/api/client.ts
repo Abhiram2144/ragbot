@@ -1,9 +1,18 @@
 const BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+export const AUTH_TOKEN_KEY = 'answerdesk_access_token'
 
 let _token: string | null = null
 
 export function setAuthToken(token: string | null) {
   _token = token
+}
+
+function expireAuth(path: string, status: number) {
+  if (status === 401 && !path.startsWith('/auth/')) {
+    localStorage.removeItem(AUTH_TOKEN_KEY)
+    setAuthToken(null)
+    window.dispatchEvent(new Event('auth:expired'))
+  }
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -17,6 +26,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const data = await res.json().catch(() => ({}))
 
   if (!res.ok) {
+    expireAuth(path, res.status)
     const message = (data as { detail?: string }).detail ?? `Request failed (${res.status})`
     throw new Error(message)
   }
@@ -32,6 +42,7 @@ async function upload<T>(path: string, body: FormData): Promise<T> {
   const data = await res.json().catch(() => ({}))
 
   if (!res.ok) {
+    expireAuth(path, res.status)
     const message = (data as { detail?: string }).detail ?? `Request failed (${res.status})`
     throw new Error(message)
   }
@@ -66,8 +77,14 @@ export interface QuerySource {
 
 export interface StreamCallbacks {
   onToken: (text: string) => void
-  onDone: (sources: QuerySource[], queryLogId: string | null) => void
+  onDone: (sources: QuerySource[], queryLogId: string | null, telemetry: QueryTelemetry | null) => void
   onError: (err: Error) => void
+}
+
+export interface QueryTelemetry {
+  latency_ms: number | null
+  source_count: number
+  confidence: 'high' | 'medium' | 'low'
 }
 
 export interface KnowledgeBase {
@@ -127,6 +144,8 @@ export interface QueryLogDetail {
   estimated_cost_usd: number | null
   search_mode: SearchMode | null
   feedback: 'up' | 'down' | null
+  confidence: 'high' | 'medium' | 'low'
+  source_count: number
   created_at: string
 }
 
@@ -134,6 +153,29 @@ export interface DailyAnalytics {
   date: string
   query_count: number
   avg_latency_ms: number | null
+  helpful_rate: number | null
+}
+
+export interface QuestionSignal {
+  question: string
+  count: number
+  query_log_id: string
+  kb_id: string
+  created_at: string
+}
+
+export interface KnowledgeBaseSignal {
+  kb_id: string
+  name: string
+  query_count: number
+}
+
+export interface StaleDocumentSignal {
+  document_id: string
+  kb_id: string
+  filename: string
+  review_date: string
+  publication_status: string
 }
 
 export interface AnalyticsResponse {
@@ -141,16 +183,62 @@ export interface AnalyticsResponse {
   avg_latency_ms: number | null
   avg_cost_usd: number | null
   feedback_ratio: number | null
+  feedback_reasons: Record<string, number>
   daily: DailyAnalytics[]
+  low_confidence_questions: QuestionSignal[]
+  common_questions: QuestionSignal[]
+  knowledge_bases: KnowledgeBaseSignal[]
+  stale_documents: StaleDocumentSignal[]
+}
+
+export interface EvaluationQuestionResult {
+  id: string
+  question: string
+  hit_rate: number
+  recall_at_5: number
+  precision_at_5: number
+  mrr: number
+  citation_accuracy: number
+  latency_ms: number
+  estimated_cost_usd: number
+  faithfulness_score?: number
+}
+
+export interface EvaluationAggregate {
+  dataset_size: number
+  num_succeeded: number
+  hit_rate: number | null
+  recall_at_5: number | null
+  precision_at_5: number | null
+  mrr: number | null
+  citation_accuracy: number | null
+  latency_ms_mean: number | null
+  estimated_cost_usd_mean: number | null
+  faithfulness_score: number | null
+  faithfulness_enabled: boolean
+  per_question: EvaluationQuestionResult[]
+}
+
+export interface EvaluationRun {
+  id: string
+  search_mode: 'dense' | 'hybrid'
+  aggregate_metrics: EvaluationAggregate
+  created_at: string
 }
 
 export type DocStatus = 'pending' | 'processing' | 'complete' | 'failed'
+export type PublicationStatus = 'draft' | 'published' | 'archived'
 
 export interface Doc {
   id: string
   kb_id: string
   filename: string
   status: DocStatus
+  publication_status: PublicationStatus
+  department: string
+  owner: string | null
+  effective_date: string | null
+  review_date: string | null
   error_message: string | null
   created_at: string
   updated_at: string
@@ -173,15 +261,41 @@ export const api = {
   },
 
   documents: {
-    list: (kbId: string) =>
-      request<Doc[]>(`/knowledge-bases/${kbId}/documents`),
-    upload: (kbId: string, file: File) => {
+    list: (kbId: string, filters?: { publication_status?: PublicationStatus; stale_only?: boolean }) => {
+      const params = new URLSearchParams()
+      if (filters?.publication_status) params.set('publication_status', filters.publication_status)
+      if (filters?.stale_only) params.set('stale_only', 'true')
+      const query = params.toString()
+      return request<Doc[]>(`/knowledge-bases/${kbId}/documents${query ? `?${query}` : ''}`)
+    },
+    upload: (kbId: string, file: File, metadata?: {
+      department?: string
+      owner?: string
+      effective_date?: string
+      review_date?: string
+      publication_status?: PublicationStatus
+    }) => {
       const form = new FormData()
       form.append('file', file)
+      if (metadata?.department) form.append('department', metadata.department)
+      if (metadata?.owner) form.append('owner', metadata.owner)
+      if (metadata?.effective_date) form.append('effective_date', metadata.effective_date)
+      if (metadata?.review_date) form.append('review_date', metadata.review_date)
+      if (metadata?.publication_status) form.append('publication_status', metadata.publication_status)
       return upload<Doc>(`/knowledge-bases/${kbId}/documents`, form)
     },
     get: (kbId: string, docId: string) =>
       request<Doc>(`/knowledge-bases/${kbId}/documents/${docId}`),
+    update: (kbId: string, docId: string, body: {
+      publication_status?: PublicationStatus
+      department?: string
+      owner?: string | null
+      effective_date?: string | null
+      review_date?: string | null
+    }) => request<Doc>(`/knowledge-bases/${kbId}/documents/${docId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
   },
 
   organization: {
@@ -203,6 +317,15 @@ export const api = {
       request<AnalyticsResponse>(`/knowledge-bases/${kbId}/analytics?days=${days}`),
   },
 
+  quality: {
+    listRuns: (kbId: string) => request<EvaluationRun[]>(`/knowledge-bases/${kbId}/quality/runs`),
+    run: (kbId: string, searchMode: 'dense' | 'hybrid', useFaithfulness = false) =>
+      request<EvaluationRun>(`/knowledge-bases/${kbId}/quality/evaluate?search_mode=${searchMode}`, {
+        method: 'POST',
+        body: JSON.stringify({ use_faithfulness: useFaithfulness }),
+      }),
+  },
+
   queries: {
     stream: (kbId: string, question: string, callbacks: StreamCallbacks): (() => void) => {
       const controller = new AbortController()
@@ -218,6 +341,7 @@ export const api = {
             signal: controller.signal,
           })
           if (!res.ok) {
+            expireAuth(`/knowledge-bases/${kbId}/query`, res.status)
             const data = await res.json().catch(() => ({}))
             throw new Error((data as { detail?: string }).detail ?? `Request failed (${res.status})`)
           }
@@ -236,7 +360,11 @@ export const api = {
                 const payload = JSON.parse(line.slice(6))
                 if (payload.type === 'token') callbacks.onToken(payload.text as string)
                 else if (payload.type === 'done')
-                  callbacks.onDone(payload.sources as QuerySource[], (payload.query_log_id as string) ?? null)
+                  callbacks.onDone(
+                    payload.sources as QuerySource[],
+                    (payload.query_log_id as string) ?? null,
+                    (payload.telemetry as QueryTelemetry) ?? null,
+                  )
               } catch (_) { /* ignore malformed SSE lines */ }
             }
           }
@@ -247,7 +375,11 @@ export const api = {
             try {
               const payload = JSON.parse(remaining.slice(6))
               if (payload.type === 'done')
-                callbacks.onDone(payload.sources as QuerySource[], (payload.query_log_id as string) ?? null)
+                callbacks.onDone(
+                  payload.sources as QuerySource[],
+                  (payload.query_log_id as string) ?? null,
+                  (payload.telemetry as QueryTelemetry) ?? null,
+                )
             } catch (_) {}
           }
         } catch (err) {
@@ -257,10 +389,14 @@ export const api = {
 
       return () => controller.abort()
     },
-    feedback: (queryLogId: string, feedback: 'up' | 'down') =>
-      request<{ id: string; feedback: string | null }>(`/queries/${queryLogId}/feedback`, {
+    feedback: (
+      queryLogId: string,
+      feedback: 'up' | 'down',
+      reason?: 'incorrect' | 'outdated' | 'missing_information',
+    ) =>
+      request<{ id: string; feedback: string | null; reason: string | null }>(`/queries/${queryLogId}/feedback`, {
         method: 'PATCH',
-        body: JSON.stringify({ feedback }),
+        body: JSON.stringify({ feedback, reason }),
       }),
   },
 }

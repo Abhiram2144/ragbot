@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { api } from '../api/client'
-import type { KnowledgeBase, Doc, QuerySource } from '../api/client'
+import type { KnowledgeBase, Doc, QuerySource, QueryTelemetry } from '../api/client'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -17,7 +17,11 @@ interface QAEntry {
   isThinking: boolean
   queryLogId: string | null
   feedback: 'up' | 'down' | null
+  feedbackReason: FeedbackReason | null
+  telemetry: QueryTelemetry | null
 }
+
+type FeedbackReason = 'incorrect' | 'outdated' | 'missing_information'
 
 // ─── ThinkingDots ─────────────────────────────────────────────────────────────
 
@@ -263,10 +267,15 @@ function ThumbIcon({ direction, filled }: { direction: 'up' | 'down'; filled: bo
 function FeedbackRow({
   entry,
   onFeedback,
+  onReport,
 }: {
   entry: QAEntry
   onFeedback: (entryId: string, value: 'up' | 'down') => void
+  onReport: (entryId: string, reason: FeedbackReason) => void
 }) {
+  const [reportOpen, setReportOpen] = useState(false)
+  const [reason, setReason] = useState<FeedbackReason>('incorrect')
+
   const btnStyle = (active: boolean): React.CSSProperties => ({
     display: 'flex',
     alignItems: 'center',
@@ -282,25 +291,55 @@ function FeedbackRow({
   })
 
   return (
-    <div style={{ display: 'flex', gap: 2, paddingLeft: 2 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 2, flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', gap: 2 }}>
+        <button
+          title="Good answer"
+          aria-label="Mark answer helpful"
+          onClick={() => onFeedback(entry.id, 'up')}
+          style={btnStyle(entry.feedback === 'up')}
+          onMouseEnter={e => { if (entry.feedback !== 'up') e.currentTarget.style.color = 'color-mix(in srgb, var(--color-ink) 55%, transparent)' }}
+          onMouseLeave={e => { if (entry.feedback !== 'up') e.currentTarget.style.color = 'color-mix(in srgb, var(--color-ink) 28%, transparent)' }}
+        >
+          <ThumbIcon direction="up" filled={entry.feedback === 'up'} />
+        </button>
+        <button
+          title="Bad answer"
+          aria-label="Mark answer unhelpful"
+          onClick={() => onFeedback(entry.id, 'down')}
+          style={btnStyle(entry.feedback === 'down')}
+          onMouseEnter={e => { if (entry.feedback !== 'down') e.currentTarget.style.color = 'color-mix(in srgb, var(--color-ink) 55%, transparent)' }}
+          onMouseLeave={e => { if (entry.feedback !== 'down') e.currentTarget.style.color = 'color-mix(in srgb, var(--color-ink) 28%, transparent)' }}
+        >
+          <ThumbIcon direction="down" filled={entry.feedback === 'down'} />
+        </button>
+      </div>
       <button
-        title="Good answer"
-        onClick={() => onFeedback(entry.id, 'up')}
-        style={btnStyle(entry.feedback === 'up')}
-        onMouseEnter={e => { if (entry.feedback !== 'up') e.currentTarget.style.color = 'color-mix(in srgb, var(--color-ink) 55%, transparent)' }}
-        onMouseLeave={e => { if (entry.feedback !== 'up') e.currentTarget.style.color = 'color-mix(in srgb, var(--color-ink) 28%, transparent)' }}
+        onClick={() => setReportOpen(open => !open)}
+        style={{ border: 'none', background: 'none', padding: '3px 0', color: 'color-mix(in srgb, var(--color-ink) 42%, transparent)', fontSize: 11, cursor: 'pointer' }}
       >
-        <ThumbIcon direction="up" filled={entry.feedback === 'up'} />
+        {entry.feedbackReason ? 'Report submitted' : 'Report answer'}
       </button>
-      <button
-        title="Bad answer"
-        onClick={() => onFeedback(entry.id, 'down')}
-        style={btnStyle(entry.feedback === 'down')}
-        onMouseEnter={e => { if (entry.feedback !== 'down') e.currentTarget.style.color = 'color-mix(in srgb, var(--color-ink) 55%, transparent)' }}
-        onMouseLeave={e => { if (entry.feedback !== 'down') e.currentTarget.style.color = 'color-mix(in srgb, var(--color-ink) 28%, transparent)' }}
-      >
-        <ThumbIcon direction="down" filled={entry.feedback === 'down'} />
-      </button>
+      {reportOpen && !entry.feedbackReason && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', paddingTop: 2 }}>
+          <select
+            value={reason}
+            onChange={e => setReason(e.target.value as FeedbackReason)}
+            aria-label="Report reason"
+            style={{ border: '1px solid var(--color-stroke)', borderRadius: 6, background: 'var(--color-surface)', color: 'var(--color-ink)', fontSize: 11, padding: '4px 6px' }}
+          >
+            <option value="incorrect">Incorrect answer</option>
+            <option value="outdated">Outdated information</option>
+            <option value="missing_information">Missing information</option>
+          </select>
+          <button
+            onClick={() => { onReport(entry.id, reason); setReportOpen(false) }}
+            style={{ border: 'none', borderRadius: 6, background: 'var(--color-ink)', color: '#fff', fontSize: 11, padding: '5px 8px', cursor: 'pointer' }}
+          >
+            Send report
+          </button>
+        </div>
+      )}
     </div>
   )
 }
@@ -311,10 +350,12 @@ function QAPair({
   entry,
   docs,
   onFeedback,
+  onReport,
 }: {
   entry: QAEntry
   docs: Doc[]
   onFeedback: (entryId: string, value: 'up' | 'down') => void
+  onReport: (entryId: string, reason: FeedbackReason) => void
 }) {
   const [highlightKeys, setHighlightKeys] = useState<Record<string, number>>({})
 
@@ -351,6 +392,17 @@ function QAPair({
           {entry.question}
         </div>
       </div>
+
+      {/* Lightweight answer quality signal; detailed retrieval scores stay in history. */}
+      {!entry.isStreaming && !entry.isThinking && entry.telemetry && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, paddingLeft: 2, color: 'color-mix(in srgb, var(--color-ink) 48%, transparent)', fontSize: 11, fontFamily: 'var(--font-mono)' }}>
+          <span style={{ color: entry.telemetry.confidence === 'high' ? 'var(--color-primary)' : entry.telemetry.confidence === 'medium' ? 'var(--color-accent)' : 'color-mix(in srgb, var(--color-ink) 55%, transparent)', fontWeight: 600 }}>
+            {entry.telemetry.confidence[0].toUpperCase() + entry.telemetry.confidence.slice(1)} confidence
+          </span>
+          <span>{entry.telemetry.source_count} {entry.telemetry.source_count === 1 ? 'source' : 'sources'}</span>
+          {entry.telemetry.latency_ms != null && <span>{entry.telemetry.latency_ms} ms</span>}
+        </div>
+      )}
 
       {/* Answer (left-aligned) */}
       <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
@@ -410,7 +462,7 @@ function QAPair({
 
       {/* Feedback (thumbs up/down) */}
       {!entry.isStreaming && !entry.isThinking && entry.queryLogId && (
-        <FeedbackRow entry={entry} onFeedback={onFeedback} />
+        <FeedbackRow entry={entry} onFeedback={onFeedback} onReport={onReport} />
       )}
     </div>
   )
@@ -517,6 +569,8 @@ export default function QueryView({ kb, docs }: { kb: KnowledgeBase; docs: Doc[]
         isThinking: true,
         queryLogId: null,
         feedback: null,
+        feedbackReason: null,
+        telemetry: null,
       },
     ])
     setQuestion('')
@@ -535,10 +589,10 @@ export default function QueryView({ kb, docs }: { kb: KnowledgeBase; docs: Doc[]
           )
         )
       },
-      onDone(sources, queryLogId) {
+      onDone(sources, queryLogId, telemetry) {
         setEntries(prev =>
           prev.map(e =>
-            e.id === entryId ? { ...e, sources, queryLogId, isStreaming: false, isThinking: false } : e
+            e.id === entryId ? { ...e, sources, queryLogId, telemetry, isStreaming: false, isThinking: false } : e
           )
         )
         setIsSubmitting(false)
@@ -568,6 +622,17 @@ export default function QueryView({ kb, docs }: { kb: KnowledgeBase; docs: Doc[]
     api.queries.feedback(entry.queryLogId, value).catch(err => {
       console.error(err)
       setEntries(prev => prev.map(e => (e.id === entryId ? { ...e, feedback: previous } : e)))
+    })
+  }
+
+  function handleReport(entryId: string, reason: FeedbackReason) {
+    const entry = entries.find(e => e.id === entryId)
+    if (!entry?.queryLogId) return
+    const previous = { feedback: entry.feedback, feedbackReason: entry.feedbackReason }
+    setEntries(prev => prev.map(e => e.id === entryId ? { ...e, feedback: 'down', feedbackReason: reason } : e))
+    api.queries.feedback(entry.queryLogId, 'down', reason).catch(err => {
+      console.error(err)
+      setEntries(prev => prev.map(e => e.id === entryId ? { ...e, ...previous } : e))
     })
   }
 
@@ -614,8 +679,8 @@ export default function QueryView({ kb, docs }: { kb: KnowledgeBase; docs: Doc[]
         {entries.length === 0 ? (
           <EmptyTranscript kbName={kb.name} />
         ) : (
-          entries.map(entry => (
-            <QAPair key={entry.id} entry={entry} docs={docs} onFeedback={handleFeedback} />
+            entries.map(entry => (
+            <QAPair key={entry.id} entry={entry} docs={docs} onFeedback={handleFeedback} onReport={handleReport} />
           ))
         )}
       </div>

@@ -5,7 +5,9 @@ from qdrant_client.models import (
     Distance,
     FieldCondition,
     Filter,
+    IsNullCondition,
     MatchValue,
+    PayloadField,
     PointStruct,
     SparseVector,
     SparseVectorParams,
@@ -33,6 +35,26 @@ def _query_points(query, using: str, query_filter: Filter, limit: int):
     ).points
 
 
+def _document_filter(org_id: str, kb_id: str, document_id: str | None = None) -> Filter:
+    conditions = [
+        FieldCondition(key="org_id", match=MatchValue(value=org_id)),
+        FieldCondition(key="kb_id", match=MatchValue(value=kb_id)),
+    ]
+    if document_id is not None:
+        conditions.append(FieldCondition(key="document_id", match=MatchValue(value=document_id)))
+    return Filter(must=conditions)
+
+
+def _published_filter(org_id: str, kb_id: str) -> Filter:
+    return Filter(
+        must=[*_document_filter(org_id, kb_id).must],
+        should=[
+            FieldCondition(key="publication_status", match=MatchValue(value="published")),
+            IsNullCondition(is_null=PayloadField(key="publication_status")),
+        ],
+    )
+
+
 def ensure_collection() -> None:
     """Create the chunks collection if it doesn't exist.
 
@@ -55,6 +77,7 @@ def index_chunks(
     org_id: str,
     kb_id: str,
     document_id: str,
+    publication_status: str,
     chunks: list[str],
     dense_vectors: list[list[float]],
     sparse_vectors: list[dict],
@@ -76,6 +99,7 @@ def index_chunks(
                 "org_id": org_id,
                 "kb_id": kb_id,
                 "document_id": document_id,
+                "publication_status": publication_status,
                 "chunk_index": chunk_index,
                 "chunk_text": chunk_text,
             },
@@ -102,12 +126,7 @@ def search_chunks(
     hits = _query_points(
         query_vector,
         "dense",
-        Filter(
-            must=[
-                FieldCondition(key="org_id", match=MatchValue(value=org_id)),
-                FieldCondition(key="kb_id", match=MatchValue(value=kb_id)),
-            ]
-        ),
+        _published_filter(org_id, kb_id),
         top_k,
     )
     return [
@@ -132,12 +151,7 @@ def search_chunks_dense(
     hits = _query_points(
         dense_vector,
         "dense",
-        Filter(
-            must=[
-                FieldCondition(key="org_id", match=MatchValue(value=org_id)),
-                FieldCondition(key="kb_id", match=MatchValue(value=kb_id)),
-            ]
-        ),
+        _published_filter(org_id, kb_id),
         top_n,
     )
     return [
@@ -165,12 +179,7 @@ def search_chunks_sparse(
             values=sparse_vector["values"],
         ),
         "sparse",
-        Filter(
-            must=[
-                FieldCondition(key="org_id", match=MatchValue(value=org_id)),
-                FieldCondition(key="kb_id", match=MatchValue(value=kb_id)),
-            ]
-        ),
+        _published_filter(org_id, kb_id),
         top_n,
     )
     return [
@@ -183,6 +192,23 @@ def search_chunks_sparse(
         }
         for hit in hits
     ]
+
+
+def update_document_publication_status(
+    org_id: str,
+    kb_id: str,
+    document_id: str,
+    publication_status: str,
+) -> None:
+    """Keep indexed chunks aligned with the document's publication state."""
+    existing = {collection.name for collection in _client.get_collections().collections}
+    if _COLLECTION not in existing:
+        return
+    _client.set_payload(
+        collection_name=_COLLECTION,
+        payload={"publication_status": publication_status},
+        points=_document_filter(org_id, kb_id, document_id),
+    )
 
 
 def hybrid_search_chunks(

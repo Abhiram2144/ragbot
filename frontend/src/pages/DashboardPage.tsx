@@ -1,15 +1,17 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, setAuthToken } from '../api/client'
-import type { KnowledgeBase, Doc } from '../api/client'
+import type { KnowledgeBase, Doc, OrgInfo, PublicationStatus } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import Sidebar from '../components/Sidebar'
+import type { WorkspaceNav } from '../components/Sidebar'
 import CreateKBModal from '../components/CreateKBModal'
 import UploadDropzone from '../components/UploadDropzone'
 import DocumentCard from '../components/DocumentCard'
 import QueryView from '../components/QueryView'
 import QueryHistoryView from '../components/QueryHistoryView'
 import AnalyticsView from '../components/AnalyticsView'
+import QualityCenter from '../components/QualityCenter'
 
 // ─── Empty states ──────────────────────────────────────────────────────────────
 
@@ -53,9 +55,22 @@ function EmptyDocList({ kbName }: { kbName: string }) {
   )
 }
 
+function WorkspaceLoading() {
+  return <div className="flex-1 flex items-center justify-center"><p className="text-sm text-ink/45">Loading your workspace…</p></div>
+}
+
+function WorkspaceError({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="flex-1 flex flex-col items-center justify-center gap-3 text-center px-8">
+      <p className="text-sm text-ink/65">We could not load your workspace.</p>
+      <button onClick={onRetry} className="text-sm font-medium cursor-pointer" style={{ color: 'var(--color-primary)' }}>Try again</button>
+    </div>
+  )
+}
+
 // ─── KB content area ────────────────────────────────────────────────────────────
 
-type ViewMode = 'documents' | 'query' | 'history' | 'analytics'
+type ViewMode = 'documents' | 'query' | 'history' | 'analytics' | 'quality'
 
 interface KBViewProps {
   kb: KnowledgeBase
@@ -63,14 +78,23 @@ interface KBViewProps {
   newDocIds: Set<string>
   docsLoading: boolean
   onDocUploaded: (doc: Doc) => void
+  onDocUpdated: (doc: Doc) => void
+  initialQueryId: string | null
+  onOpenQuery: (id: string) => void
   viewMode: ViewMode
   onViewModeChange: (mode: ViewMode) => void
 }
 
-function KBView({ kb, docs, newDocIds, docsLoading, onDocUploaded, viewMode, onViewModeChange }: KBViewProps) {
+function KBView({ kb, docs, newDocIds, docsLoading, onDocUploaded, onDocUpdated, initialQueryId, onOpenQuery, viewMode, onViewModeChange }: KBViewProps) {
+  const [filter, setFilter] = useState<'all' | PublicationStatus | 'stale'>('all')
   const sorted = [...docs].sort(
     (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
   )
+  const visibleDocs = sorted.filter(doc => {
+    if (filter === 'all') return true
+    if (filter === 'stale') return Boolean(doc.review_date && new Date(`${doc.review_date}T23:59:59`) < new Date() && doc.publication_status === 'published')
+    return doc.publication_status === filter
+  })
 
   return (
     <div className="flex flex-col h-full">
@@ -83,50 +107,21 @@ function KBView({ kb, docs, newDocIds, docsLoading, onDocUploaded, viewMode, onV
           </p>
         )}
 
-        {/* Tab bar */}
-        <div style={{ display: 'flex', marginTop: 16 }}>
-          {(['documents', 'query', 'history', 'analytics'] as const).map(mode => (
-            <button
-              key={mode}
-              onClick={() => onViewModeChange(mode)}
-              style={{
-                padding: '7px 16px',
-                fontSize: 13,
-                fontWeight: viewMode === mode ? 500 : 400,
-                fontFamily: 'var(--font-sans)',
-                color: viewMode === mode
-                  ? 'var(--color-primary)'
-                  : 'color-mix(in srgb, var(--color-ink) 42%, transparent)',
-                background: 'none',
-                border: 'none',
-                borderBottom: viewMode === mode
-                  ? '2px solid var(--color-primary)'
-                  : '2px solid transparent',
-                cursor: 'pointer',
-                transition: 'color 150ms, border-color 150ms',
-                marginBottom: -1,
-                letterSpacing: '0.01em',
-              }}
-            >
-              {mode === 'documents'
-                ? 'Documents'
-                : mode === 'query'
-                ? 'Query'
-                : mode === 'history'
-                ? 'History'
-                : 'Analytics'}
-            </button>
-          ))}
-        </div>
       </div>
 
       {/* Content */}
       {viewMode === 'query' ? (
         <QueryView kb={kb} docs={docs} />
       ) : viewMode === 'history' ? (
-        <QueryHistoryView kb={kb} />
+        <QueryHistoryView kb={kb} initialQueryId={initialQueryId} />
       ) : viewMode === 'analytics' ? (
-        <AnalyticsView kb={kb} />
+        <AnalyticsView
+          kb={kb}
+          onOpenQuery={onOpenQuery}
+          onOpenDocuments={() => onViewModeChange('documents')}
+        />
+      ) : viewMode === 'quality' ? (
+        <QualityCenter kb={kb} />
       ) : (
         <div className="flex-1 overflow-y-auto px-8 py-6 flex flex-col gap-6">
           {/* Upload */}
@@ -139,9 +134,18 @@ function KBView({ kb, docs, newDocIds, docsLoading, onDocUploaded, viewMode, onV
 
           {/* Document list */}
           <section>
-            <h2 className="text-xs font-medium uppercase tracking-wide mb-3" style={{ color: 'color-mix(in srgb, var(--color-ink) 45%, transparent)' }}>
-              Documents{docs.length > 0 && ` · ${docs.length}`}
-            </h2>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-xs font-medium uppercase tracking-wide" style={{ color: 'color-mix(in srgb, var(--color-ink) 45%, transparent)' }}>
+                Documents{docs.length > 0 && ` · ${docs.length}`}
+              </h2>
+              <select value={filter} onChange={e => setFilter(e.target.value as typeof filter)} aria-label="Filter documents" className="rounded-md border border-stroke bg-surface px-2 py-1 text-xs text-ink/60 outline-none">
+                <option value="all">All documents</option>
+                <option value="published">Published</option>
+                <option value="draft">Drafts</option>
+                <option value="archived">Archived</option>
+                <option value="stale">Needs review</option>
+              </select>
+            </div>
 
             {docsLoading ? (
               <div className="flex flex-col gap-3">
@@ -149,15 +153,16 @@ function KBView({ kb, docs, newDocIds, docsLoading, onDocUploaded, viewMode, onV
                   <div key={i} className="h-16 rounded-xl bg-surface animate-pulse" style={{ border: '1px solid var(--color-stroke)' }} />
                 ))}
               </div>
-            ) : sorted.length === 0 ? (
+            ) : visibleDocs.length === 0 ? (
               <EmptyDocList kbName={kb.name} />
             ) : (
               <div className="flex flex-col gap-3">
-                {sorted.map(doc => (
+                {visibleDocs.map(doc => (
                   <DocumentCard
                     key={doc.id}
                     doc={doc}
                     isNew={newDocIds.has(doc.id)}
+                    onUpdated={onDocUpdated}
                   />
                 ))}
               </div>
@@ -183,16 +188,27 @@ export default function DashboardPage() {
   const [newDocIds, setNewDocIds] = useState<Set<string>>(new Set())
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [viewMode, setViewMode] = useState<ViewMode>('documents')
+  const [activeNav, setActiveNav] = useState<WorkspaceNav>('knowledge')
+  const [org, setOrg] = useState<OrgInfo | null>(null)
+  const [workspaceLoading, setWorkspaceLoading] = useState(true)
+  const [workspaceError, setWorkspaceError] = useState(false)
+  const [selectedQueryId, setSelectedQueryId] = useState<string | null>(null)
 
-  // Load KB list on mount
-  useEffect(() => {
+  function loadWorkspace() {
+    setWorkspaceLoading(true)
+    setWorkspaceError(false)
     api.kbs.list()
       .then(data => {
         setKbs(data)
         if (data.length > 0) setSelectedKbId(data[0].id)
       })
-      .catch(console.error)
-  }, [])
+      .then(() => api.organization.get())
+      .then(setOrg)
+      .catch(() => setWorkspaceError(true))
+      .finally(() => setWorkspaceLoading(false))
+  }
+
+  useEffect(() => { loadWorkspace() }, [])
 
   // Load documents when selected KB changes
   useEffect(() => {
@@ -240,6 +256,7 @@ export default function DashboardPage() {
   function handleKbSelect(kbId: string) {
     if (kbId === selectedKbId) return
     setViewMode('documents')
+    setActiveNav('knowledge')
     setContentVisible(false)
     setTimeout(() => {
       setSelectedKbId(kbId)
@@ -272,6 +289,10 @@ export default function DashboardPage() {
     }, 500)
   }
 
+  function handleDocUpdated(updated: Doc) {
+    setDocs(prev => prev.map(doc => doc.id === updated.id ? updated : doc))
+  }
+
   function logout() {
     setAuthToken(null)
     clearToken()
@@ -279,6 +300,24 @@ export default function DashboardPage() {
   }
 
   const selectedKb = kbs.find(kb => kb.id === selectedKbId) ?? null
+
+  function handleNavigate(nav: WorkspaceNav) {
+    if (nav === 'settings') {
+      navigate('/settings')
+      return
+    }
+    setActiveNav(nav)
+    if (nav === 'ask') setViewMode('query')
+    if (nav === 'knowledge') setViewMode('documents')
+    if (nav === 'overview') setViewMode('analytics')
+    if (nav === 'quality') setViewMode('quality')
+  }
+
+  function openQueryDetail(queryId: string) {
+    setSelectedQueryId(queryId)
+    setViewMode('history')
+    setActiveNav('overview')
+  }
 
   return (
     <div className="flex h-full bg-background">
@@ -290,6 +329,9 @@ export default function DashboardPage() {
         onLogout={logout}
         onSettingsClick={() => navigate('/settings')}
         settingsActive={false}
+        activeNav={activeNav}
+        onNavigate={handleNavigate}
+        organizationName={org?.name}
       />
 
       {/* Main area with cross-fade */}
@@ -300,16 +342,30 @@ export default function DashboardPage() {
           transitionDuration: '200ms',
         }}
       >
-        {selectedKb ? (
-          <KBView
-            kb={selectedKb}
-            docs={docs}
-            newDocIds={newDocIds}
-            docsLoading={docsLoading}
-            onDocUploaded={handleDocUploaded}
-            viewMode={viewMode}
-            onViewModeChange={setViewMode}
-          />
+        {workspaceLoading ? <WorkspaceLoading /> : workspaceError ? <WorkspaceError onRetry={loadWorkspace} /> : selectedKb ? (
+          <>
+            <header className="flex items-center justify-between px-8 py-4 shrink-0" style={{ borderBottom: '1px solid var(--color-stroke)', background: 'var(--color-surface)' }}>
+              <div>
+                <p className="text-[11px] uppercase tracking-wide text-ink/40">{org?.name ?? 'Workspace'}</p>
+                <p className="text-sm font-medium text-ink mt-0.5">{selectedKb.name}</p>
+              </div>
+              <span className="text-xs text-ink/40">{activeNav === 'ask' ? 'Employee knowledge portal' : activeNav === 'quality' ? 'Retrieval quality' : activeNav === 'overview' ? 'Workspace overview' : 'Knowledge management'}</span>
+            </header>
+            <div className="flex-1 min-h-0 overflow-hidden">
+              <KBView
+                kb={selectedKb}
+                docs={docs}
+                newDocIds={newDocIds}
+                docsLoading={docsLoading}
+                onDocUploaded={handleDocUploaded}
+                onDocUpdated={handleDocUpdated}
+                initialQueryId={selectedQueryId}
+                onOpenQuery={openQueryDetail}
+                viewMode={viewMode}
+                onViewModeChange={mode => { setViewMode(mode); setActiveNav(mode === 'query' ? 'ask' : mode === 'documents' ? 'knowledge' : mode === 'analytics' ? activeNav : activeNav) }}
+              />
+            </div>
+          </>
         ) : (
           <NoKBSelected onCreateClick={() => setShowCreateModal(true)} />
         )}

@@ -49,6 +49,8 @@ export default function SettingsPage() {
         onLogout={logout}
         onSettingsClick={() => {}}
         settingsActive={true}
+        activeNav="settings"
+        organizationName={org?.name}
       />
 
       <main className="flex-1 overflow-y-auto">

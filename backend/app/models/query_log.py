@@ -32,6 +32,7 @@ class QueryLog(Base):
     # rerank_score, final_rank} — per-key null for scores that don't apply.
     chunk_scores: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
     estimated_cost_usd: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    # "up" | "down" | null — schema only for now, wiring is 6.3.
+    # "up" | "down" | null.
     feedback: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
+    feedback_reason: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

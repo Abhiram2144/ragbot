@@ -46,6 +46,7 @@ def process_document(self, document_id: str):
             org_id=str(doc.org_id),
             kb_id=str(doc.kb_id),
             document_id=str(doc.id),
+            publication_status=doc.publication_status,
             chunks=chunks,
             dense_vectors=dense_vectors,
             sparse_vectors=sparse_vectors,

@@ -2,7 +2,10 @@ import uuid
 from pathlib import Path
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
+from datetime import date
+from typing import List, Literal, Optional
+
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -10,7 +13,8 @@ from app.database import get_db
 from app.dependencies import get_kb_or_404
 from app.models.document import Document
 from app.models.knowledge_base import KnowledgeBase
-from app.schemas.document import DocumentResponse
+from app.schemas.document import DocumentResponse, DocumentUpdate
+from app.services.vector_store import update_document_publication_status
 from app.workers.tasks import process_document
 
 router = APIRouter(prefix="/knowledge-bases", tags=["documents"])
@@ -34,6 +38,11 @@ def _get_doc_or_404(
 @router.post("/{kb_id}/documents", response_model=DocumentResponse, status_code=201)
 def upload_document(
     file: UploadFile,
+    department: str = Form(default="HR"),
+    owner: Optional[str] = Form(default=None),
+    effective_date: Optional[date] = Form(default=None),
+    review_date: Optional[date] = Form(default=None),
+    publication_status: Literal["draft", "published", "archived"] = Form(default="published"),
     kb: KnowledgeBase = Depends(get_kb_or_404),
     db: Session = Depends(get_db),
 ):
@@ -65,6 +74,11 @@ def upload_document(
         filename=safe_name,
         file_path=str(file_path),
         status="pending",
+        publication_status=publication_status,
+        department=department.strip() or "HR",
+        owner=owner.strip() if owner else None,
+        effective_date=effective_date,
+        review_date=review_date,
     )
     db.add(doc)
     db.commit()
@@ -79,8 +93,15 @@ def upload_document(
 def list_documents(
     kb: KnowledgeBase = Depends(get_kb_or_404),
     db: Session = Depends(get_db),
+    publication_status: Optional[Literal["draft", "published", "archived"]] = Query(default=None),
+    stale_only: bool = Query(default=False),
 ):
-    return db.query(Document).filter(Document.kb_id == kb.id).all()
+    query = db.query(Document).filter(Document.kb_id == kb.id)
+    if publication_status:
+        query = query.filter(Document.publication_status == publication_status)
+    if stale_only:
+        query = query.filter(Document.review_date.isnot(None), Document.review_date < date.today())
+    return query.order_by(Document.created_at.desc()).all()
 
 
 @router.get("/{kb_id}/documents/{document_id}", response_model=DocumentResponse)
@@ -90,6 +111,30 @@ def get_document(
     db: Session = Depends(get_db),
 ):
     return _get_doc_or_404(document_id, kb, db)
+
+
+@router.patch("/{kb_id}/documents/{document_id}", response_model=DocumentResponse)
+def update_document(
+    body: DocumentUpdate,
+    document_id: uuid.UUID,
+    kb: KnowledgeBase = Depends(get_kb_or_404),
+    db: Session = Depends(get_db),
+):
+    doc = _get_doc_or_404(document_id, kb, db)
+    updates = body.model_dump(exclude_unset=True)
+    for field, value in updates.items():
+        setattr(doc, field, value)
+    db.commit()
+    db.refresh(doc)
+
+    if "publication_status" in updates:
+        update_document_publication_status(
+            org_id=str(doc.org_id),
+            kb_id=str(doc.kb_id),
+            document_id=str(doc.id),
+            publication_status=doc.publication_status,
+        )
+    return doc
 
 
 @router.delete("/{kb_id}/documents/{document_id}", status_code=204)

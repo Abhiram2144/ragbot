@@ -1,13 +1,13 @@
 @import "tailwindcss";
 
 @theme {
-  --color-background: #F7F7F3;
-  --color-surface: #FFFFFF;
-  --color-ink: #1B2430;
-  --color-primary: #2F6F62;
-  --color-primary-hover: #27604f;
-  --color-accent: #C98A3E;
-  --color-stroke: #E4E2DA;
+  --color-background: #F3F1EA;
+  --color-surface: #FCFBF7;
+  --color-ink: #18252A;
+  --color-primary: #205B4E;
+  --color-primary-hover: #17493E;
+  --color-accent: #B97938;
+  --color-stroke: #DDD9CD;
 
   --font-sans: "IBM Plex Sans", sans-serif;
   --font-mono: "IBM Plex Mono", monospace;
@@ -26,6 +26,7 @@ html, body, #root {
 body {
   font-family: var(--font-sans);
   background-color: var(--color-background);
+  background-image: linear-gradient(135deg, color-mix(in srgb, var(--color-surface) 42%, transparent), transparent 42%);
   color: var(--color-ink);
   -webkit-font-smoothing: antialiased;
 }

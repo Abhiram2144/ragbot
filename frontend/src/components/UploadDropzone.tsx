@@ -14,12 +14,19 @@ export default function UploadDropzone({ kbId, onUploaded }: Props) {
   const [error, setError] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
   const dragCounter = useRef(0)
+  const [metadataOpen, setMetadataOpen] = useState(false)
+  const [metadata, setMetadata] = useState({ department: 'HR', owner: '', effective_date: '', review_date: '', publication_status: 'published' as const })
 
   async function handleFile(file: File) {
     setUploading(true)
     setError('')
     try {
-      const doc = await api.documents.upload(kbId, file)
+      const doc = await api.documents.upload(kbId, file, {
+        ...metadata,
+        owner: metadata.owner || undefined,
+        effective_date: metadata.effective_date || undefined,
+        review_date: metadata.review_date || undefined,
+      })
       onUploaded(doc)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Upload failed')
@@ -58,6 +65,18 @@ export default function UploadDropzone({ kbId, onUploaded }: Props) {
 
   return (
     <div className="flex flex-col gap-2">
+      <button type="button" onClick={() => setMetadataOpen(open => !open)} className="self-end text-xs font-medium text-primary cursor-pointer">
+        {metadataOpen ? 'Hide document details' : 'Add document details'}
+      </button>
+      {metadataOpen && (
+        <div className="grid grid-cols-2 gap-3 rounded-lg border border-stroke bg-surface p-3">
+          <label className="text-xs text-ink/55">Department<input value={metadata.department} onChange={e => setMetadata({ ...metadata, department: e.target.value })} className="mt-1 w-full rounded-md border border-stroke bg-background px-2 py-1.5 text-sm text-ink outline-none" /></label>
+          <label className="text-xs text-ink/55">Owner<input value={metadata.owner} onChange={e => setMetadata({ ...metadata, owner: e.target.value })} className="mt-1 w-full rounded-md border border-stroke bg-background px-2 py-1.5 text-sm text-ink outline-none" placeholder="name or email" /></label>
+          <label className="text-xs text-ink/55">Effective date<input type="date" value={metadata.effective_date} onChange={e => setMetadata({ ...metadata, effective_date: e.target.value })} className="mt-1 w-full rounded-md border border-stroke bg-background px-2 py-1.5 text-sm text-ink outline-none" /></label>
+          <label className="text-xs text-ink/55">Review date<input type="date" value={metadata.review_date} onChange={e => setMetadata({ ...metadata, review_date: e.target.value })} className="mt-1 w-full rounded-md border border-stroke bg-background px-2 py-1.5 text-sm text-ink outline-none" /></label>
+          <label className="text-xs text-ink/55">Lifecycle status<select value={metadata.publication_status} onChange={e => setMetadata({ ...metadata, publication_status: e.target.value as typeof metadata.publication_status })} className="mt-1 w-full rounded-md border border-stroke bg-background px-2 py-1.5 text-sm text-ink outline-none"><option value="published">Published</option><option value="draft">Draft</option><option value="archived">Archived</option></select></label>
+        </div>
+      )}
       <div
         role="button"
         tabIndex={0}
